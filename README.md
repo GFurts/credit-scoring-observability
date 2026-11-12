@@ -58,6 +58,7 @@ src/credit_scoring_observability/
   metrics.py         Prometheus metrics exporter
   causal_analysis.py interventional analysis of the performance drop
   fairness_audit.py  group-level bias audit
+  proxy_audit.py     can the excluded attribute be predicted from the model features?
 monitoring/          Prometheus config, alert rules, Grafana provisioning and dashboard
 reports/             generated evidence (HTML reports, JSON/Markdown summaries)
 tests/               contract tests
@@ -87,6 +88,7 @@ poetry run python -m credit_scoring_observability.drift
 # 4. Analyses
 poetry run python -m credit_scoring_observability.causal_analysis
 poetry run python -m credit_scoring_observability.fairness_audit
+poetry run python -m credit_scoring_observability.proxy_audit
 
 # 5. Observability
 docker compose up -d                                            # Prometheus :9090, Grafana :3000 (admin/admin)
@@ -297,12 +299,23 @@ Evaluated on the same held-out test set as training (4,000 customers, threshold 
 | marital status | 0.867 | 0.122 | 0.011 | 0.013 |
 
 **Reading:**
-- **Sex:** the observed group-level metrics are similar (flag-rate ratio 0.92, TPR gap 0.003, FPR gap 0.002). However, excluding `sex` from the model features does not guarantee the absence of proxy discrimination, since other features can carry correlated information. Further analysis is required (for example, testing how well `sex` can be predicted from the model features).
+- **Sex:** the observed group-level metrics are similar (flag-rate ratio 0.92, TPR gap 0.003, FPR gap 0.002). However, excluding `sex` from the model features does not remove the information it carries: the proxy test below shows that the model features still contain some signal about `sex`.
 - **Age:** the flag-rate ratio (0.65) is below the common 0.8 rule of thumb (a US employment convention, not a Brazilian legal test), but the **FPR gap is only 0.011**: good payers are wrongly flagged at about 4% to 5% in every age band. The difference comes from real default-rate differences (20.2% to 25.3%) and from how well the model detects defaulters in each band (TPR 32% to 45%).
 - **Marital status "other"** has 61 customers; its figures are noise.
 - No confidence intervals were computed.
 
-**Mitigation decisions:** `sex` and `id` are excluded; the audit is repeatable (`python -m credit_scoring_observability.fairness_audit`); `age` and `marriage` are kept in the model **on purpose and with this risk documented**. Recommended next steps: legal review of using age and marital status, an ablation retraining without them to measure the cost, and adding the group-level gaps above to the monitoring dashboard (age also drifts: customers get younger in the simulation).
+**Proxy test (`proxy_audit.py`).** To check whether removing `sex` removes its information, a model is trained to predict `sex` from the 22 model features (5-fold cross-validation).
+
+| Test | AUC |
+|---|---|
+| Predict `sex` from the model features | 0.649 ± 0.007 |
+| Control: shuffled labels (should be ~0.5) | 0.498 ± 0.006 |
+
+Strongest features for this prediction: `limit_bal` (0.098), `pay_3` (0.096), `age` (0.094), `education` (0.075), `marriage` (0.075).
+
+The control sits at chance level, so the signal is real: the model features carry a **moderate** amount of information about `sex`. Even so, the audit above shows near-identical outcomes by sex, so in this model that information did not translate into different treatment. This is evidence at a single threshold (0.5) and without confidence intervals; it is not proof of non-discrimination.
+
+**Mitigation decisions:** `sex` and `id` are excluded; the audit is repeatable (`python -m credit_scoring_observability.fairness_audit`); `age` and `marriage` are kept in the model **on purpose and with this risk documented**. Recommended next steps: legal review of using age and marital status, an ablation retraining without them to measure the cost (the demographic features `age`, `education` and `marriage` are among the strongest carriers of the `sex` signal), and adding the group-level gaps above to the monitoring dashboard (age also drifts: customers get younger in the simulation).
 
 ### Retention plan (proposed policy, to be validated by legal)
 
@@ -336,6 +349,7 @@ Labels (actual defaults) arrive late in real life, so performance alerts lag; tr
 - No feature-level explanations (reason codes) per decision yet.
 - Alerts are visible in Prometheus and Grafana but not routed to a notification channel (no Alertmanager).
 - Fairness audit without confidence intervals; small groups are unreliable.
+- The model features carry a moderate signal about `sex` (AUC 0.65 in the proxy test). Outcome parity held at threshold 0.5, but it was not tested across thresholds.
 - Latency figures come from a local machine.
 - Grafana demo credentials are for local use only.
 
