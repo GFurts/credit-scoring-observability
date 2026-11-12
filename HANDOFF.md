@@ -27,3 +27,15 @@ Gerar produção a partir de `production_base.csv` alterando >= 2 variáveis imp
 (ex.: limit_bal, pay_1/atrasos) + concept drift (mudar a relação feature->alvo);
 predizer com o baseline; relatório Evidently (PSI/KS) em `reports/`.
 Importar `feature_columns` de train.py. Etapa 3: logs + MLflow ou Prometheus/Grafana. Etapa 4: LGPD, causalidade, README.
+
+## Resultado da Etapa 2
+- `simulate_drift.py`: 4 períodos de 2.500 linhas (período 1 = controle). Data drift em bill_amt, pay_1 e age;
+  concept drift = bons pagadores (pay_1 <= 0) passam a dar calote. Todos passam no contrato.
+- Degradação do baseline: AUC 0,788 -> 0,736 -> 0,694 -> 0,649; recall 0,344 -> 0,267.
+- `drift.py`: Evidently com PSI (limite 0,2) e KS (p < 0,05). Saídas: `reports/drift_period_{k}_psi.html`,
+  `reports/drift_period_4_ks.html`, `reports/drift_summary.json`, `data/production/predictions.csv`.
+- PSI aponta age (período 3) e age + pay_1 (período 4); bill_amt fica em atenção (~0,13). KS é mais sensível.
+- Alertas planejados: crítico (PSI >= 0,2 ou queda forte de AUC); atenção (PSI 0,1 a 0,2 ou KS).
+
+## Próximo: Etapa 3 (observabilidade)
+Pipeline que processa cada lote (valida contrato -> prediz -> drift), com logs estruturados e métricas centralizadas.
