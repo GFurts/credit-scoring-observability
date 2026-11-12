@@ -21,3 +21,35 @@ Baixe-o no site da UCI e salve como `data/raw/default of credit card clients.xls
 - [ ] Etapa 2: simulação e detecção de drift
 - [ ] Etapa 3: observabilidade
 - [ ] Etapa 4: governança e LGPD
+
+
+
+### Análise causal — Data Drift e Concept Drift
+
+O diagrama abaixo ilustra uma hipótese de como mudanças
+econômicas podem afetar as características dos clientes
+e o risco de inadimplência.
+
+```mermaid
+flowchart LR
+    E["Economic shock (inflation, unemployment)"]
+    X["Observed features: bill_amt, pay_1, age"]
+    D["Default"]
+    S["Model score"]
+
+    E -->|"data drift (visible: PSI / KS)"| X
+    X -->|"learned relationship"| D
+    X --> S
+    E -.->|"concept drift (invisible without labels)"| D
+```
+
+A seta tracejada representa um possível efeito de fatores
+econômicos não capturados pelas variáveis de entrada.
+
+O Data Drift é monitorado pelas mudanças nas distribuições
+das variáveis. Já o Concept Drift requer evidências de
+mudanças na relação entre as características e o resultado
+real, utilizando dados rotulados e análises adicionais.
+
+Este grafo é uma hipótese explicativa, não uma identificação
+causal comprovada.
