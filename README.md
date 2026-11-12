@@ -1,6 +1,7 @@
 # Credit Scoring Observability
 
 ![CI](https://github.com/GFurts/credit-scoring-observability/actions/workflows/ci.yml/badge.svg)
+**Live replay:** https://credit-scoring-observability.streamlit.app (interactive view of the monitoring results by period; pre-computed, no model or row-level data).
 
 > Reliability and governance layer for a credit-scoring model in production: **data contracts**, **drift simulation and detection**, **observability** (logs, MLflow, Prometheus, Grafana), **causal analysis** of performance degradation and **LGPD-oriented governance**.
 
