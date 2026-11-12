@@ -98,9 +98,11 @@ poetry run pytest -q                                            # needs the data
 
 ## Data
 
-[Default of Credit Card Clients](https://archive.ics.uci.edu/dataset/350/default+of+credit+card+clients) (UCI Machine Learning Repository), 30,000 customers from Taiwan (2005), binary target "default next month" (22.1% positives). Please check the dataset page for its license terms.
+[Default of Credit Card Clients](https://archive.ics.uci.edu/dataset/350/default+of+credit+card+clients) (UCI Machine Learning Repository), 30,000 customers from Taiwan (2005), binary target "default next month" (22.1% positives). Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0).
 
-> Yeh, I. C., & Lien, C. H. (2009). The comparisons of data mining techniques for the predictive accuracy of probability of default of credit card clients. *Expert Systems with Applications*, 36(2), 2473-2480.
+> Yeh, I. (2009). Default of Credit Card Clients [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C55S3H
+>
+> Introductory paper: Yeh, I. C., & Lien, C. H. (2009). The comparisons of data mining techniques for the predictive accuracy of probability of default of credit card clients. *Expert Systems with Applications*, 36(2), 2473-2480.
 
 The 30,000 rows are split once: **20,000 reference** rows (what the model sees) and **10,000 production base** rows (where drift is injected). The raw file is git-ignored.
 
@@ -262,11 +264,16 @@ None of these fields is "sensitive personal data" in the sense of Art. 5, II of 
 
 ### Automated decisions (Art. 20)
 
-Credit decisions made only by automated processing can be contested: the data subject may request **review by a natural person** and clear information about the criteria and procedures used (respecting trade secrets). Operating requirements derived from that:
+Data subjects have the right to request a review of decisions based solely on automated processing that affect their interests, including decisions that define their credit profile (Art. 20). The controller must provide clear and adequate information about the criteria and procedures used, subject to commercial and industrial secrecy (Art. 20, §1).
 
-1. adverse decisions must be routable to a human reviewer;
-2. the lender must be able to explain which factors drove a score (feature-level reason codes are **not implemented yet**: see limitations);
-3. model versions and thresholds are traceable through MLflow, so a past decision can be reconstructed.
+As an additional governance safeguard, this project **recommends** making human review available for adverse credit decisions. This is a project recommendation, not a statutory requirement.
+
+What follows from this for operation:
+
+1. **Legal duty:** be able to answer a review request and to provide clear information about the criteria and procedures behind a score.
+2. **Recommended safeguard:** route adverse decisions to a human reviewer.
+3. **Recommended capability:** feature-level reason codes per decision (**not implemented yet**: see limitations).
+4. **Traceability:** model versions and thresholds are recorded in MLflow, so a past decision can be reconstructed.
 
 ### Bias audit (`fairness_audit.py`)
 
@@ -290,7 +297,7 @@ Evaluated on the same held-out test set as training (4,000 customers, threshold 
 | marital status | 0.867 | 0.122 | 0.011 | 0.013 |
 
 **Reading:**
-- **Sex:** essentially identical outcomes. Excluding `sex` from the features did not leave a visible proxy effect.
+- **Sex:** the observed group-level metrics are similar (flag-rate ratio 0.92, TPR gap 0.003, FPR gap 0.002). However, excluding `sex` from the model features does not guarantee the absence of proxy discrimination, since other features can carry correlated information. Further analysis is required (for example, testing how well `sex` can be predicted from the model features).
 - **Age:** the flag-rate ratio (0.65) is below the common 0.8 rule of thumb (a US employment convention, not a Brazilian legal test), but the **FPR gap is only 0.011**: good payers are wrongly flagged at about 4% to 5% in every age band. The difference comes from real default-rate differences (20.2% to 25.3%) and from how well the model detects defaulters in each band (TPR 32% to 45%).
 - **Marital status "other"** has 61 customers; its figures are noise.
 - No confidence intervals were computed.
