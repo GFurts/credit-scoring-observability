@@ -10,7 +10,7 @@
   "version": 1,
   "refresh": "5s",
   "time": {
-    "from": "now-15m",
+    "from": "now-5m",
     "to": "now"
   },
   "editable": true,
@@ -474,7 +474,7 @@
     },
     {
       "id": 9,
-      "title": "PSI por variável (último lote)",
+      "title": "Top 10 PSI por variável (último lote)",
       "description": "Quais variáveis sofreram drift",
       "type": "bargauge",
       "datasource": {
@@ -489,7 +489,7 @@
       },
       "targets": [
         {
-          "expr": "credit_drift_psi",
+          "expr": "topk(10, credit_drift_psi)",
           "legendFormat": "{{feature}}",
           "refId": "A",
           "instant": true,
@@ -532,7 +532,8 @@
           ],
           "values": false
         },
-        "showUnfilled": true
+        "showUnfilled": true,
+        "namePlacement": "left"
       }
     },
     {

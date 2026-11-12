@@ -38,30 +38,43 @@ STATUSES = ("ok", "warning", "critical", "blocked")
 
 
 def init(baseline_auc: float) -> None:
-    """Cria as séries com valor 0 para o Prometheus enxergar o primeiro incremento."""
+    """Inicializa as métricas do Prometheus antes do processamento dos lotes."""
     BASELINE_AUC.set(baseline_auc)
+
+    # Inicializa os contadores em zero para o Prometheus reconhecê-los.
     for status in STATUSES:
         BATCHES.labels(status=status).inc(0)
+
+    # Evita valores artificiais de zero antes do primeiro lote válido.
+    # NaN representa uma medição ainda não disponível.
+    for gauge in (AUC, RECALL, DEFAULT_RATE, PSI_MAX, KS_SHARE):
+        gauge.set(float("nan"))
 
 
 def publish(result: dict) -> None:
     """Publica o resultado de um lote (o dict devolvido por process_batch)."""
     m = result["metrics"]
+
     BATCHES.labels(status=result["status"]).inc()
+
     for severity, rule, _ in result["alerts"]:
         ALERTS.labels(severity=severity, rule=rule).inc()
+
     ROWS.set(m["rows"])
     CONTRACT_OK.set(m["contract_ok"])
     STAGE_SECONDS.labels(stage="total").set(m["latency_total_s"])
     LAST_BATCH_TS.set(time.time())
-    if m["contract_ok"]:  # lote bloqueado não tem predição nem drift
+
+    if m["contract_ok"]:  # Lote bloqueado não tem predição nem drift.
         AUC.set(m["auc"])
         RECALL.set(m["recall"])
         DEFAULT_RATE.set(m["default_rate"])
         PSI_MAX.set(m["psi_max"])
         KS_SHARE.set(m["ks_drifted_share"])
+
         STAGE_SECONDS.labels(stage="score").set(m["latency_score_s"])
         STAGE_SECONDS.labels(stage="drift").set(m["latency_drift_s"])
+
         for key, value in m.items():
             if key.startswith("psi/"):
                 PSI.labels(feature=key[4:]).set(value)
