@@ -1,8 +1,10 @@
 """Pipeline de produção: valida, prediz, mede drift e dispara alertas por lote.
 
-Cada lote gera logs estruturados (logs/pipeline.log) e métricas centralizadas no MLflow.
+Cada lote gera logs estruturados (logs/pipeline.log) e métricas
+centralizadas no MLflow.
 """
 
+import argparse
 import json
 import logging
 import time
@@ -12,8 +14,10 @@ import joblib
 import mlflow
 import pandas as pd
 import pandera.pandas as pa
+from prometheus_client import start_http_server
 from sklearn.metrics import recall_score, roc_auc_score
 
+from credit_scoring_observability import metrics
 from credit_scoring_observability.contracts import CONTRACT
 from credit_scoring_observability.data import TARGET
 from credit_scoring_observability.drift import KS_ALPHA, PSI_THRESHOLD, run_drift
@@ -25,15 +29,16 @@ from credit_scoring_observability.train import METRICS_PATH, MODEL_PATH, feature
 LOG_PATH = Path("logs/pipeline.log")
 MLFLOW_URI = "sqlite:///mlflow.db"
 EXPERIMENT = "credit-scoring-monitoring"
+METRICS_PORT = 8000
 
 # Regras de alerta (documentadas no README)
-PSI_ATTENTION = 0.1  # PSI >= 0.1: atenção | PSI >= 0.2 (PSI_THRESHOLD): crítico
-KS_SHARE_WARN = 0.25  # KS acusa >= 25% das variáveis: atenção
-AUC_WARN_DROP = 0.03  # AUC caiu >= 0.03 vs baseline: atenção
-AUC_CRIT_DROP = 0.05  # AUC caiu >= 0.05 vs baseline: crítico
+PSI_ATTENTION = 0.1
+KS_SHARE_WARN = 0.25
+AUC_WARN_DROP = 0.03
+AUC_CRIT_DROP = 0.05
 
 
-# ---------- logs estruturados (uma linha JSON por evento) ----------
+# ---------- Logs estruturados ----------
 class JsonFormatter(logging.Formatter):
     def format(self, record):
         payload = {
@@ -66,23 +71,28 @@ def event(level: int, name: str, **ctx) -> None:
     LOG.log(level, name, extra={"ctx": ctx})
 
 
-# ---------- regras de alerta ----------
+# ---------- Regras de alerta ----------
 def evaluate_alerts(
     psi: dict, ks_share: float, auc: float, baseline_auc: float
 ) -> list:
     alerts = []
+
     for col, value in psi.items():
         if value >= PSI_THRESHOLD:
             alerts.append(("critical", "psi_drift", f"{col} PSI={value:.3f}"))
         elif value >= PSI_ATTENTION:
             alerts.append(("warning", "psi_attention", f"{col} PSI={value:.3f}"))
+
     if ks_share >= KS_SHARE_WARN:
         alerts.append(("warning", "ks_drift", f"KS acusa {ks_share:.0%} das variáveis"))
+
     drop = baseline_auc - auc
+
     if drop >= AUC_CRIT_DROP:
         alerts.append(("critical", "auc_drop", f"AUC caiu {drop:.3f} vs baseline"))
     elif drop >= AUC_WARN_DROP:
         alerts.append(("warning", "auc_drop", f"AUC caiu {drop:.3f} vs baseline"))
+
     return alerts
 
 
@@ -95,22 +105,39 @@ def status_from(alerts: list) -> str:
     )
 
 
-# ---------- processamento de um lote ----------
+# ---------- Processamento de um lote ----------
 def process_batch(name, step, df, reference, model, features, baseline_auc) -> dict:
     t_start = time.perf_counter()
     event(logging.INFO, "batch_received", batch=name, rows=len(df))
-    result = {"step": step, "batch": name, "metrics": {"rows": float(len(df))}}
 
-    # 1) Contrato de dados: se reprovar, o lote é bloqueado e nada mais roda.
+    result = {
+        "step": step,
+        "batch": name,
+        "metrics": {"rows": float(len(df))},
+    }
+
+    # 1) Contrato: dados inválidos são bloqueados.
     try:
         CONTRACT.validate(df, lazy=True)
     except pa.errors.SchemaErrors as err:
         grouped = err.failure_cases.groupby(["column", "check"]).size()
         violations = {f"{col}: {chk}": int(n) for (col, chk), n in grouped.items()}
-        event(logging.ERROR, "contract_failed", batch=name, violations=violations)
+
+        event(
+            logging.ERROR,
+            "contract_failed",
+            batch=name,
+            violations=violations,
+        )
+
         alerts = [
-            ("critical", "contract_failed", f"{sum(violations.values())} violações")
+            (
+                "critical",
+                "contract_failed",
+                f"{sum(violations.values())} violações",
+            )
         ]
+
         result.update(status="blocked", alerts=alerts)
         result["metrics"].update(
             contract_ok=0.0,
@@ -118,6 +145,7 @@ def process_batch(name, step, df, reference, model, features, baseline_auc) -> d
             alerts_warning=0.0,
             latency_total_s=time.perf_counter() - t_start,
         )
+
         event(
             logging.CRITICAL,
             "alert",
@@ -126,21 +154,31 @@ def process_batch(name, step, df, reference, model, features, baseline_auc) -> d
             rule="contract_failed",
             detail=alerts[0][2],
         )
+
         return result
+
     event(logging.INFO, "contract_passed", batch=name)
 
     # 2) Predição
     t = time.perf_counter()
     score = model.predict_proba(df[features])[:, 1]
     latency_score = time.perf_counter() - t
-    event(logging.INFO, "batch_scored", batch=name, seconds=round(latency_score, 4))
 
-    # 3) Drift (PSI e KS contra a referência)
+    event(
+        logging.INFO,
+        "batch_scored",
+        batch=name,
+        seconds=round(latency_score, 4),
+    )
+
+    # 3) Drift: PSI e KS contra a referência
     t = time.perf_counter()
     _, psi = run_drift(reference, df, features, "psi", PSI_THRESHOLD)
     _, ks = run_drift(reference, df, features, "ks", KS_ALPHA)
+
     latency_drift = time.perf_counter() - t
     ks_share = sum(p < KS_ALPHA for p in ks.values()) / len(ks)
+
     event(
         logging.INFO,
         "drift_computed",
@@ -150,12 +188,13 @@ def process_batch(name, step, df, reference, model, features, baseline_auc) -> d
         seconds=round(latency_drift, 2),
     )
 
-    # 4) Desempenho (aqui assumimos que o resultado real do lote já chegou)
+    # 4) Desempenho: assumimos que o resultado real já chegou.
     auc = float(roc_auc_score(df[TARGET], score))
     recall = float(recall_score(df[TARGET], score >= 0.5))
 
     # 5) Alertas
     alerts = evaluate_alerts(psi, ks_share, auc, baseline_auc)
+
     for level, rule, detail in alerts:
         event(
             logging.CRITICAL if level == "critical" else logging.WARNING,
@@ -167,6 +206,7 @@ def process_batch(name, step, df, reference, model, features, baseline_auc) -> d
         )
 
     result.update(status=status_from(alerts), alerts=alerts)
+
     result["metrics"].update(
         contract_ok=1.0,
         auc=auc,
@@ -181,6 +221,7 @@ def process_batch(name, step, df, reference, model, features, baseline_auc) -> d
         latency_total_s=time.perf_counter() - t_start,
         **{f"psi/{col}": value for col, value in psi.items()},
     )
+
     event(logging.INFO, "batch_done", batch=name, status=result["status"])
     return result
 
@@ -189,6 +230,7 @@ def process_batch(name, step, df, reference, model, features, baseline_auc) -> d
 def log_to_mlflow(results: list, baseline_auc: float) -> None:
     mlflow.set_tracking_uri(MLFLOW_URI)
     mlflow.set_experiment(EXPERIMENT)
+
     with mlflow.start_run(run_name=time.strftime("monitoring-%Y%m%d-%H%M%S")):
         mlflow.log_params(
             {
@@ -201,23 +243,52 @@ def log_to_mlflow(results: list, baseline_auc: float) -> None:
                 "auc_crit_drop": AUC_CRIT_DROP,
             }
         )
-        for r in results:  # step 0 = lote ruim; steps 1..4 = períodos de produção
+
+        for r in results:
             for key, value in r["metrics"].items():
                 mlflow.log_metric(key, value, step=r["step"])
+
         mlflow.log_artifact(str(LOG_PATH))
         mlflow.log_artifact(str(MODEL_PATH), artifact_path="model")
         mlflow.log_artifacts("reports", artifact_path="reports")
 
 
+# ---------- Execução principal ----------
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Pipeline de monitoramento do credit scoring"
+    )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help=f"expõe métricas Prometheus em :{METRICS_PORT} e fica no ar no final",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=0.0,
+        help="segundos de espera entre lotes (com --serve, use 15)",
+    )
+    args = parser.parse_args()
+
     reference = pd.read_csv(REFERENCE_CSV)
     features = feature_columns(reference)
     model = joblib.load(MODEL_PATH)
     baseline_auc = json.loads(METRICS_PATH.read_text())["roc_auc"]
 
+    if args.serve:
+        start_http_server(METRICS_PORT)
+        metrics.init(baseline_auc)
+        event(
+            logging.INFO,
+            "metrics_server_started",
+            port=METRICS_PORT,
+        )
+
     batches = [("bad_batch", BAD_BATCH_CSV)] + [
         (f"period_{k}", period_path(k)) for k in PERIODS
     ]
+
     event(
         logging.INFO,
         "pipeline_started",
@@ -225,14 +296,30 @@ def main() -> None:
         baseline_auc=baseline_auc,
     )
 
-    results = [
-        process_batch(
-            name, step, pd.read_csv(path), reference, model, features, baseline_auc
-        )
-        for step, (name, path) in enumerate(batches)
-    ]
+    results = []
 
-    event(logging.INFO, "pipeline_finished", batches=len(results))
+    for step, (name, path) in enumerate(batches):
+        result = process_batch(
+            name,
+            step,
+            pd.read_csv(path),
+            reference,
+            model,
+            features,
+            baseline_auc,
+        )
+        results.append(result)
+
+        if args.serve:
+            metrics.publish(result)
+            time.sleep(args.delay)
+
+    event(
+        logging.INFO,
+        "pipeline_finished",
+        batches=len(results),
+    )
+
     log_to_mlflow(results, baseline_auc)
 
     table = pd.DataFrame(
@@ -248,10 +335,24 @@ def main() -> None:
             for r in results
         ]
     )
+
     print("\n", table.round(3).to_string(index=False))
     print(
-        "\nVeja o MLflow com: poetry run mlflow ui --backend-store-uri sqlite:///mlflow.db"
+        "\nVeja o MLflow com: "
+        "poetry run mlflow ui --backend-store-uri sqlite:///mlflow.db"
     )
+
+    if args.serve:
+        print(
+            f"\nMétricas no ar em "
+            f"http://localhost:{METRICS_PORT}/metrics "
+            "(Ctrl+C para encerrar)"
+        )
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":
