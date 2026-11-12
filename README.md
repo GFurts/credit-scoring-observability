@@ -74,7 +74,7 @@ tests/               unit tests: alert rules, data contract, drift simulator
 
 ## Quickstart
 
-Requires Python 3.12 and [Poetry](https://python-poetry.org/). Docker is only needed for Prometheus and Grafana.
+Requires Python 3.12 or 3.13 and [Poetry](https://python-poetry.org/). Docker is only needed for Prometheus and Grafana.
 
 ```bash
 poetry install
