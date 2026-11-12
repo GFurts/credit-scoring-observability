@@ -1,5 +1,7 @@
 # Credit Scoring Observability
 
+![CI](https://github.com/GFurts/credit-scoring-observability/actions/workflows/ci.yml/badge.svg)
+
 > Reliability and governance layer for a credit-scoring model in production: **data contracts**, **drift simulation and detection**, **observability** (logs, MLflow, Prometheus, Grafana), **causal analysis** of performance degradation and **LGPD-oriented governance**.
 
 Project for the **FIAP MLET Tech Challenge, Phase 4** (Continuous Observability, Drift Detection, Data Quality and Governance in Production). Built by [Gabriel Furtado](https://github.com/GFurts).
@@ -35,12 +37,13 @@ flowchart LR
 
 | Tech Challenge requirement | Where |
 |---|---|
-| Data validation pipeline (data contracts) | `contracts.py`, `make_bad_batch.py`, `tests/test_contracts.py` |
+| Data validation pipeline (data contracts) | `contracts.py`, `make_bad_batch.py`, `tests/test_contract.py`, `tests/test_contracts.py` |
 | Drift simulation and statistical detection | `simulate_drift.py`, `drift.py` |
 | Dashboards / HTML reports | `reports/drift_period_*_psi.html`, `reports/drift_period_4_ks.html`, Grafana, MLflow |
 | Logs and metrics centralized | `pipeline.py` (JSON logs), MLflow, Prometheus (`metrics.py`) |
 | Governance documentation | [Governance and LGPD](#governance-and-lgpd) |
 | Causal analysis | `causal_analysis.py`, [Causal analysis](#causal-analysis) |
+| Automated tests and CI | `tests/`, `.github/workflows/ci.yml` (GitHub Actions) |
 | Semantic commit history | Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`) |
 
 ## Repository layout
@@ -61,7 +64,9 @@ src/credit_scoring_observability/
   proxy_audit.py     can the excluded attribute be predicted from the model features?
 monitoring/          Prometheus config, alert rules, Grafana provisioning and dashboard
 reports/             generated evidence (HTML reports, JSON/Markdown summaries)
-tests/               contract tests
+docs/img/            screenshots used in this README
+tests/               unit tests: alert rules, data contract, drift simulator
+.github/workflows/   CI (runs the tests on every push and pull request)
 ```
 
 ## Quickstart
@@ -95,7 +100,7 @@ docker compose up -d                                            # Prometheus :90
 poetry run python -m credit_scoring_observability.pipeline --serve --delay 15
 poetry run mlflow ui --backend-store-uri sqlite:///mlflow.db    # MLflow :5000
 
-poetry run pytest -q                                            # needs the data from steps 1-3
+poetry run pytest -q                                            # data-dependent tests are skipped if steps 1-3 were not run
 ```
 
 ## Data
@@ -197,6 +202,24 @@ Replay result: the corrupted batch is **blocked**, period 1 is **ok**, and perio
 - **Logs:** `logs/pipeline.log`, one JSON event per line (batch received, contract passed or failed with violations, scored, drift computed, alert, batch done). Logs contain counts and metrics, never row-level data.
 - **MLflow:** one run per replay, metrics logged per batch (step 0 is the corrupted batch, steps 1 to 4 the periods), with the log, the model and the HTML reports as artifacts.
 - **Prometheus + Grafana:** `docker compose up -d` starts both. Prometheus scrapes the pipeline every 5 s and evaluates `monitoring/alerts.yml`; Grafana provisions the dashboard "Credit Scoring: Observabilidade" automatically (AUC vs baseline, PSI over time, top-10 PSI, latency, batches by status, alerts by rule).
+
+## Screenshots
+
+**Grafana dashboard** after replaying the four production periods: AUC falls from 0.791 to 0.649 while the maximum PSI climbs to 0.504.
+
+![Grafana dashboard](docs/img/grafana-dashboard.png)
+
+**Prometheus alerts** firing for critical drift (`DataDriftCritical`) and model degradation (`ModelPerformanceDegraded`).
+
+![Prometheus alerts](docs/img/prometheus-alerts.png)
+
+| MLflow: AUC per period | MLflow: max PSI per period |
+|---|---|
+| ![AUC per period](docs/img/mlflow-auc.png) | ![Max PSI per period](docs/img/mlflow-psi-max.png) |
+
+**Evidently drift report (period 4).** The report-level verdict ("Dataset Drift is NOT detected") follows Evidently's default rule of 50% of columns drifting. This project alerts per feature instead (PSI >= 0.2), and `age` (0.50) and `pay_1` (0.27) both exceed it.
+
+![Evidently drift report](docs/img/drift-report-period4.png)
 
 ## Causal analysis
 
@@ -330,6 +353,19 @@ The control sits at chance level, so the signal is real: the model features carr
 At the end of processing, personal data are **deleted**, except where Art. 16 allows keeping them (for example a legal or regulatory obligation, or exclusive controller use after anonymization). Anonymized data stop being personal data only while the anonymization cannot be reasonably reversed (Art. 12). Data subjects keep their Art. 18 rights (access, correction, deletion where applicable, among others), handled through the lender's data protection officer.
 
 A **data protection impact assessment** (*relatório de impacto*, Art. 38) is recommended before production.
+
+## Tests and CI
+
+`poetry run pytest -q` runs unit tests for the parts that make decisions:
+
+| Test file | What it protects |
+|---|---|
+| `tests/test_alerts.py` | alert rules: PSI and AUC thresholds (including the exact boundary), KS share, one alert per drifting feature, no alert when AUC improves |
+| `tests/test_contract.py` | the strict data contract on a synthetic batch: valid batch passes; negative age, invalid `sex`, duplicated `id` and unexpected columns are blocked |
+| `tests/test_simulate_drift.py` | each simulated cause moves only what it should (bills, late payments, age); zero drift changes nothing; same seed gives the same result |
+| `tests/test_contracts.py` | contract against the real reference data and the corrupted batch (skipped automatically when the local data files are absent) |
+
+GitHub Actions (`.github/workflows/ci.yml`) installs the project with Poetry and runs the suite on every push and pull request. The data files are git-ignored, so in CI the tests that need them are skipped and the synthetic-data tests carry the coverage.
 
 ## Operating playbook
 
