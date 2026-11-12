@@ -14,7 +14,9 @@ dependencies = [
     "pandera (>=0.36.0,<0.37.0)",
     "evidently (>=0.7.23,<0.8.0)",
     "openpyxl (>=3.1.5,<4.0.0)",
-    "xlrd (>=2.0.2,<3.0.0)"
+    "xlrd (>=2.0.2,<3.0.0)",
+    "mlflow (>=3.18.0,<4.0.0)",
+    "prometheus-client (>=0.26.0,<0.27.0)"
 ]
 
 [tool.poetry]

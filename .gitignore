@@ -12,3 +12,7 @@ data/production/
 models/*.pkl
 models/*.joblib
 HANDOFF.md
+mlflow.db
+mlruns/
+mlartifacts/
+logs/
