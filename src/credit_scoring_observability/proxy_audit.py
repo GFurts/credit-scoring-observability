@@ -1,8 +1,8 @@
-"""Teste de proxy: dá para prever o atributo excluído (sex) a partir das features do modelo?
+"""Teste de proxy: é possível prever o atributo excluído (sex) pelas features?
 
-Se as features do modelo conseguem prever `sex` bem, elas carregam informação sobre o
-atributo mesmo sem ele ter sido usado (risco de discriminação por proxy). AUC perto de
-0.5 significa que quase não há informação sobre `sex` nas features.
+Se as features do modelo conseguem prever `sex`, elas carregam informação
+sobre esse atributo mesmo sem ele ser utilizado diretamente pelo modelo.
+Isso indica um possível risco de discriminação por proxy.
 """
 
 import json
@@ -23,7 +23,11 @@ REPORT_JSON = Path("reports/proxy_audit.json")
 
 def new_model() -> XGBClassifier:
     return XGBClassifier(
-        n_estimators=100, max_depth=3, learning_rate=0.1, random_state=42, n_jobs=-1
+        n_estimators=100,
+        max_depth=3,
+        learning_rate=0.1,
+        random_state=42,
+        n_jobs=-1,
     )
 
 
@@ -39,26 +43,34 @@ def main() -> None:
     X, y = df[features], (df[PROTECTED] == 2).astype(int)
 
     auc, auc_std = cv_auc(X, y)
-    # Controle: com o rótulo embaralhado não há sinal nenhum; o AUC deve ficar perto de 0.5.
+
+    # Controle: rótulos embaralhados devem produzir AUC próxima de 0.5.
     shuffled = pd.Series(
-        np.random.default_rng(42).permutation(y.to_numpy()), index=y.index
+        np.random.default_rng(42).permutation(y.to_numpy()),
+        index=y.index,
     )
     chance, chance_std = cv_auc(X, shuffled)
 
     top = (
-        pd.Series(new_model().fit(X, y).feature_importances_, index=features)
+        pd.Series(
+            new_model().fit(X, y).feature_importances_,
+            index=features,
+        )
         .sort_values(ascending=False)
         .head(5)
     )
 
-    verdict = "negligible" if auc < 0.55 else "weak" if auc < 0.65 else "notable"
+    # Diferença observada entre a previsão real e o controle.
+    gap = auc - chance
+
     lines = [
         "| Test | AUC (5-fold CV) |",
         "|---|---|",
         f"| Predict `{PROTECTED}` from the model features | {auc:.3f} ± {auc_std:.3f} |",
         f"| Control: shuffled labels (should be ~0.5) | {chance:.3f} ± {chance_std:.3f} |",
         "",
-        f"Proxy signal (heuristic scale: <0.55 negligible, 0.55-0.65 weak, >0.65 notable): **{verdict}**.",
+        f"Gap vs shuffled-label control: **{gap:+.3f}** AUC. Any reading of this gap "
+        "(weak, moderate, notable) is a judgment call and is made in the README, not here.",
         "",
         "Top features for predicting the protected attribute:",
         "",
@@ -66,7 +78,9 @@ def main() -> None:
         "|---|---|",
         *[f"| {name} | {value:.3f} |" for name, value in top.items()],
     ]
+
     REPORT_MD.write_text("\n".join(lines), encoding="utf-8")
+
     REPORT_JSON.write_text(
         json.dumps(
             {
@@ -74,7 +88,7 @@ def main() -> None:
                 "auc_cv": round(auc, 4),
                 "auc_cv_std": round(auc_std, 4),
                 "control_auc": round(chance, 4),
-                "verdict": verdict,
+                "gap_vs_control": round(gap, 4),
                 "top_features": {k: round(float(v), 4) for k, v in top.items()},
             },
             indent=2,
@@ -84,7 +98,7 @@ def main() -> None:
 
     print(f"AUC prevendo '{PROTECTED}' pelas features: {auc:.3f} ± {auc_std:.3f}")
     print(f"Controle (rótulo embaralhado):           {chance:.3f} ± {chance_std:.3f}")
-    print(f"Sinal de proxy: {verdict}")
+    print(f"Diferença para o controle: {gap:+.3f} AUC")
     print("\nFeatures mais usadas:")
     print(top.round(3).to_string())
 
