@@ -11,3 +11,4 @@ data/reference/
 data/production/
 models/*.pkl
 models/*.joblib
+HANDOFF.md
