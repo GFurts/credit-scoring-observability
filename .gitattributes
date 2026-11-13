@@ -1,0 +1,7 @@
+
+# Generated Evidently reports
+reports/*.html linguist-generated
+
+# Published generated HTML reports
+docs/*.html linguist-generated
+docs/**/*.html linguist-generated
